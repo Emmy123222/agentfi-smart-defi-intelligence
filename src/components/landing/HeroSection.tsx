@@ -88,9 +88,9 @@ export function HeroSection() {
               className="bg-primary hover:bg-primary/90 text-primary-foreground glow-purple group"
               asChild
             >
-              <Link to={isConnected ? "/create" : "#"}>
+              <Link to={isConnected ? "/dashboard" : "#"}>
                 <Zap className="w-5 h-5 mr-2" />
-                {isConnected ? 'Create Your Agent' : 'Connect to Start'}
+                {isConnected ? 'Launch App' : 'Connect to Start'}
                 <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
               </Link>
             </Button>
@@ -100,8 +100,8 @@ export function HeroSection() {
               className="border-border hover:bg-secondary"
               asChild
             >
-              <Link to="/leaderboard">
-                View Live Agents
+              <Link to="/dashboard">
+                View Live Dashboard
               </Link>
             </Button>
           </motion.div>

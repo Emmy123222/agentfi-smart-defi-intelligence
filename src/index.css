@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Bitcount+Prop+Single:wght@100..900&family=Bitcount+Single:wght@100..900&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -73,6 +75,7 @@
 
   body {
     @apply bg-background text-foreground antialiased;
+    font-family: "Bitcount Single", "Inter", system-ui, sans-serif;
     font-feature-settings: "rlig" 1, "calt" 1;
   }
 

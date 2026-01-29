@@ -71,8 +71,10 @@ export default {
         sm: "calc(var(--radius) - 4px)",
       },
       fontFamily: {
-        sans: ["Inter", "system-ui", "sans-serif"],
-        mono: ["JetBrains Mono", "monospace"],
+        sans: ["Bitcount Single", "Inter", "system-ui", "sans-serif"],
+        mono: ["Bitcount Prop Single", "JetBrains Mono", "monospace"],
+        bitcount: ["Bitcount Single", "sans-serif"],
+        "bitcount-prop": ["Bitcount Prop Single", "monospace"],
       },
       keyframes: {
         "accordion-down": {

@@ -1,4 +1,4 @@
-import { Bot, Github, Twitter } from 'lucide-react';
+import { Github, Twitter } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 export function Footer() {
@@ -9,9 +9,11 @@ export function Footer() {
           {/* Brand */}
           <div className="md:col-span-1">
             <Link to="/" className="flex items-center gap-2 mb-4">
-              <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center">
-                <Bot className="w-5 h-5 text-primary" />
-              </div>
+              <img 
+                src="/logo.png" 
+                alt="AgentFi Logo" 
+                className="w-8 h-8 rounded-lg object-contain"
+              />
               <span className="text-xl font-bold gradient-text">AgentFi</span>
             </Link>
             <p className="text-sm text-muted-foreground">
@@ -29,13 +31,13 @@ export function Footer() {
                 </Link>
               </li>
               <li>
-                <Link to="/create" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+                <Link to="/create-agent" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
                   Create Agent
                 </Link>
               </li>
               <li>
-                <Link to="/leaderboard" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-                  Leaderboard
+                <Link to="/settings" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+                  Settings
                 </Link>
               </li>
             </ul>
@@ -85,7 +87,7 @@ export function Footer() {
 
         <div className="border-t border-border mt-8 pt-8 flex flex-col md:flex-row items-center justify-between gap-4">
           <p className="text-sm text-muted-foreground">
-            © 2025 AgentFi. All rights reserved.
+            © 2026 AgentFi. All rights reserved.
           </p>
           <div className="flex items-center gap-4">
             <span className="text-sm text-muted-foreground">Built on</span>
