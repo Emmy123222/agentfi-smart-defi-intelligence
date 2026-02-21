@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAccount } from 'wagmi';
@@ -7,6 +7,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Navbar } from '@/components/Navbar';
+import { AgentService } from '@/services/agentService';
+import { SignalService } from '@/services/signalService';
+import { IntegrationService } from '@/services/integrationService';
+import type { Database } from '@/integrations/supabase/types';
 import { toast } from 'sonner';
 import { 
   ArrowLeft, 
@@ -18,76 +22,121 @@ import {
   Clock,
   ExternalLink,
   Settings,
-  AlertCircle
+  AlertCircle,
+  RefreshCw,
+  Zap
 } from 'lucide-react';
+
+type Agent = Database['public']['Tables']['agents']['Row'];
+type TradingSignal = Database['public']['Tables']['trading_signals']['Row'];
 
 const AgentDetails = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { isConnected } = useAccount();
+  const { isConnected, address } = useAccount();
   
-  // Mock agent data - replace with real data later
-  const [agent] = useState({
-    id: id || '1',
-    name: 'Alpha Trend Bot',
-    strategy: 'Trend Following',
-    status: 'active',
-    balance: 1250.45,
-    initialBalance: 1000,
-    pnl: 250.45,
-    pnlPercent: 25.05,
-    trades: 23,
-    winRate: 78,
-    createdAt: '2024-01-15',
-    riskLevel: 'Medium',
-    lastTrade: '2 hours ago'
-  });
+  const [agent, setAgent] = useState<Agent | null>(null);
+  const [signals, setSignals] = useState<TradingSignal[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [updating, setUpdating] = useState(false);
+  const [generatingSignal, setGeneratingSignal] = useState(false);
+  const [blockchainData, setBlockchainData] = useState<any>(null);
+  const [marketAnalysis, setMarketAnalysis] = useState<any>(null);
 
-  const [trades] = useState([
-    {
-      id: '1',
-      pair: 'ETH/USDC',
-      type: 'BUY',
-      amount: 0.5,
-      price: 2450.30,
-      pnl: 45.20,
-      timestamp: '2024-01-20 14:30:00',
-      txHash: '0x1234...5678'
-    },
-    {
-      id: '2',
-      pair: 'MATIC/USDC',
-      type: 'SELL',
-      amount: 100,
-      price: 0.85,
-      pnl: -12.50,
-      timestamp: '2024-01-20 12:15:00',
-      txHash: '0x5678...9012'
-    },
-    {
-      id: '3',
-      pair: 'ETH/USDC',
-      type: 'SELL',
-      amount: 0.3,
-      price: 2480.75,
-      pnl: 78.90,
-      timestamp: '2024-01-20 10:45:00',
-      txHash: '0x9012...3456'
+  useEffect(() => {
+    if (isConnected && id) {
+      loadAgentData();
     }
-  ]);
+  }, [isConnected, id]);
+
+  const loadAgentData = async () => {
+    if (!id) return;
+    
+    try {
+      setLoading(true);
+      // Use comprehensive data fetching with blockchain and AI integration
+      const comprehensiveData = await AgentService.getComprehensiveAgentData(id);
+      
+      if (!comprehensiveData.agent) {
+        toast.error('Agent not found');
+        navigate('/dashboard');
+        return;
+      }
+      
+      setAgent(comprehensiveData.agent);
+      setSignals(comprehensiveData.signals);
+      setBlockchainData(comprehensiveData.blockchainData);
+      setMarketAnalysis(comprehensiveData.marketAnalysis);
+      
+      if (comprehensiveData.isBlockchainSynced) {
+        console.log('✅ Agent is synced with blockchain');
+      } else {
+        console.log('⚠️ Agent not synced with blockchain');
+      }
+    } catch (error) {
+      console.error('Failed to load agent data:', error);
+      toast.error('Failed to load agent data');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleToggleAgent = async () => {
+    if (!agent || !address) return;
+    
     const newStatus = agent.status === 'active' ? 'paused' : 'active';
     
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      setUpdating(true);
+      // Use integrated service for blockchain sync
+      const result = await AgentService.updateAgentStatusWithSync(agent.id, newStatus, address);
       
-      toast.success(`Agent ${newStatus === 'active' ? 'resumed' : 'paused'} successfully`);
-      // In real app, update agent status here
+      setAgent({ ...agent, status: newStatus });
+      
+      if (result.blockchainTxHash) {
+        toast.success(`Agent ${newStatus === 'active' ? 'resumed' : 'paused'} and synced with blockchain! 🚀`);
+      } else {
+        toast.success(`Agent ${newStatus === 'active' ? 'resumed' : 'paused'} in database. Blockchain sync can be done later.`);
+      }
     } catch (error) {
+      console.error('Failed to update agent status:', error);
       toast.error('Failed to update agent status');
+    } finally {
+      setUpdating(false);
     }
+  };
+
+  const handleGenerateSignal = async () => {
+    if (!agent || !address) return;
+    
+    try {
+      setGeneratingSignal(true);
+      // Use integrated service for AI + optional blockchain execution
+      const result = await IntegrationService.generateAndExecuteSignal(
+        agent.id, 
+        address, 
+        false // Don't auto-execute on blockchain by default
+      );
+      
+      setSignals([result.signal, ...signals]);
+      
+      if (result.executionTxHash) {
+        toast.success(`${result.signal.signal_type} signal generated and executed on blockchain! 🚀`);
+      } else {
+        toast.success(`${result.signal.signal_type} signal generated by AI`);
+      }
+    } catch (error) {
+      console.error('Failed to generate signal:', error);
+      toast.error('Failed to generate signal');
+    } finally {
+      setGeneratingSignal(false);
+    }
+  };
+
+  const strategyNames = {
+    trend: 'Trend Following',
+    momentum: 'Momentum',
+    'mean-reversion': 'Mean Reversion'
   };
 
   if (!isConnected) {
@@ -103,6 +152,38 @@ const AgentDetails = () => {
       </div>
     );
   }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar />
+        <div className="container mx-auto px-4 pt-32">
+          <div className="flex items-center justify-center">
+            <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!agent) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar />
+        <div className="container mx-auto px-4 pt-32">
+          <div className="text-center">
+            <h1 className="text-3xl font-bold mb-4">Agent Not Found</h1>
+            <Button onClick={() => navigate('/dashboard')}>
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              Back to Dashboard
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const pnlPercent = agent.allocated_amount > 0 ? (agent.total_pnl / agent.allocated_amount) * 100 : 0;
 
   return (
     <div className="min-h-screen bg-background">
@@ -123,16 +204,24 @@ const AgentDetails = () => {
             </Button>
           </div>
           <div className="flex gap-3">
-            <Button variant="outline" size="sm">
-              <Settings className="w-4 h-4 mr-2" />
-              Configure
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={handleGenerateSignal}
+              disabled={generatingSignal || agent.status !== 'active'}
+            >
+              <Zap className={`w-4 h-4 mr-2 ${generatingSignal ? 'animate-pulse' : ''}`} />
+              Generate Signal
             </Button>
             <Button 
               onClick={handleToggleAgent}
+              disabled={updating}
               variant={agent.status === 'active' ? 'destructive' : 'default'}
               size="sm"
             >
-              {agent.status === 'active' ? (
+              {updating ? (
+                <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+              ) : agent.status === 'active' ? (
                 <>
                   <Pause className="w-4 h-4 mr-2" />
                   Pause Agent
@@ -155,7 +244,7 @@ const AgentDetails = () => {
                 <div className="flex items-center justify-between">
                   <div>
                     <CardTitle className="text-2xl">{agent.name}</CardTitle>
-                    <p className="text-muted-foreground">{agent.strategy}</p>
+                    <p className="text-muted-foreground">{strategyNames[agent.strategy]}</p>
                   </div>
                   <Badge 
                     variant={agent.status === 'active' ? 'default' : 'secondary'}
@@ -170,24 +259,24 @@ const AgentDetails = () => {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
                   <div>
                     <p className="text-sm text-muted-foreground mb-1">Current Balance</p>
-                    <p className="text-2xl font-bold">${agent.balance.toLocaleString()}</p>
+                    <p className="text-2xl font-bold">${agent.current_balance.toLocaleString()}</p>
                   </div>
                   <div>
                     <p className="text-sm text-muted-foreground mb-1">Total P&L</p>
-                    <p className={`text-2xl font-bold ${agent.pnl >= 0 ? 'text-neon-green' : 'text-red-400'}`}>
-                      {agent.pnl >= 0 ? '+' : ''}${agent.pnl.toFixed(2)}
+                    <p className={`text-2xl font-bold ${agent.total_pnl >= 0 ? 'text-neon-green' : 'text-red-400'}`}>
+                      {agent.total_pnl >= 0 ? '+' : ''}${agent.total_pnl.toFixed(2)}
                     </p>
-                    <p className={`text-sm ${agent.pnl >= 0 ? 'text-neon-green' : 'text-red-400'}`}>
-                      {agent.pnlPercent >= 0 ? '+' : ''}{agent.pnlPercent.toFixed(1)}%
+                    <p className={`text-sm ${agent.total_pnl >= 0 ? 'text-neon-green' : 'text-red-400'}`}>
+                      {pnlPercent >= 0 ? '+' : ''}{pnlPercent.toFixed(1)}%
                     </p>
                   </div>
                   <div>
                     <p className="text-sm text-muted-foreground mb-1">Total Trades</p>
-                    <p className="text-2xl font-bold">{agent.trades}</p>
+                    <p className="text-2xl font-bold">{agent.total_trades}</p>
                   </div>
                   <div>
                     <p className="text-sm text-muted-foreground mb-1">Win Rate</p>
-                    <p className="text-2xl font-bold">{agent.winRate}%</p>
+                    <p className="text-2xl font-bold">{agent.win_rate}%</p>
                   </div>
                 </div>
               </CardContent>
@@ -202,19 +291,28 @@ const AgentDetails = () => {
               <CardContent className="space-y-3">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Risk Level</span>
-                  <span className="font-medium">{agent.riskLevel}</span>
+                  <span className="font-medium capitalize">{agent.risk_level}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Created</span>
-                  <span className="font-medium">{agent.createdAt}</span>
+                  <span className="font-medium">{new Date(agent.created_at).toLocaleDateString()}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Last Trade</span>
-                  <span className="font-medium">{agent.lastTrade}</span>
+                  <span className="text-muted-foreground">Last Signal</span>
+                  <span className="font-medium">
+                    {agent.last_signal_at 
+                      ? new Date(agent.last_signal_at).toLocaleString()
+                      : 'Never'
+                    }
+                  </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Initial Balance</span>
-                  <span className="font-medium">${agent.initialBalance.toLocaleString()}</span>
+                  <span className="text-muted-foreground">Allocated Amount</span>
+                  <span className="font-medium">${agent.allocated_amount.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Slippage Tolerance</span>
+                  <span className="font-medium">{agent.slippage_tolerance}%</span>
                 </div>
               </CardContent>
             </Card>
@@ -237,68 +335,104 @@ const AgentDetails = () => {
           </div>
         </div>
 
-        {/* Performance Chart Placeholder */}
-        <Card className="glass-card mb-8">
-          <CardHeader>
-            <CardTitle>Performance Chart</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="h-64 flex items-center justify-center border-2 border-dashed border-border rounded-lg">
-              <div className="text-center">
-                <TrendingUp className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground">Performance chart coming soon</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
         {/* Tabs */}
-        <Tabs defaultValue="trades" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="trades">Trade History</TabsTrigger>
+        <Tabs defaultValue="signals" className="space-y-6">
+          <TabsList className="grid w-full grid-cols-3">
+            <TabsTrigger value="signals">Trading Signals</TabsTrigger>
+            <TabsTrigger value="pairs">Token Pairs</TabsTrigger>
             <TabsTrigger value="strategy">Strategy Details</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="trades">
+          <TabsContent value="signals">
             <Card className="glass-card">
               <CardHeader>
-                <CardTitle>Recent Trades</CardTitle>
+                <CardTitle>Recent Signals</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {trades.map((trade) => (
-                    <motion.div
-                      key={trade.id}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="flex items-center justify-between p-4 rounded-lg border border-border/50 hover:border-border transition-colors"
-                    >
-                      <div className="flex items-center gap-4">
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                          trade.type === 'BUY' ? 'bg-neon-green/20 text-neon-green' : 'bg-red-400/20 text-red-400'
-                        }`}>
-                          {trade.type === 'BUY' ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                  {signals.length === 0 ? (
+                    <div className="text-center py-8">
+                      <Activity className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                      <p className="text-muted-foreground">No signals generated yet</p>
+                      {agent.status === 'active' && (
+                        <Button 
+                          onClick={handleGenerateSignal}
+                          disabled={generatingSignal}
+                          className="mt-4"
+                        >
+                          <Zap className="w-4 h-4 mr-2" />
+                          Generate First Signal
+                        </Button>
+                      )}
+                    </div>
+                  ) : (
+                    signals.map((signal, index) => (
+                      <motion.div
+                        key={`${signal.id}-${index}`}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="flex items-center justify-between p-4 rounded-lg border border-border/50 hover:border-border transition-colors"
+                      >
+                        <div className="flex items-center gap-4">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                            signal.signal_type === 'BUY' 
+                              ? 'bg-neon-green/20 text-neon-green' 
+                              : signal.signal_type === 'SELL'
+                              ? 'bg-red-400/20 text-red-400'
+                              : 'bg-yellow-400/20 text-yellow-400'
+                          }`}>
+                            {signal.signal_type === 'BUY' ? (
+                              <TrendingUp className="w-4 h-4" />
+                            ) : signal.signal_type === 'SELL' ? (
+                              <TrendingDown className="w-4 h-4" />
+                            ) : (
+                              <Activity className="w-4 h-4" />
+                            )}
+                          </div>
+                          <div>
+                            <p className="font-medium">{signal.token_pair}</p>
+                            <p className="text-sm text-muted-foreground">
+                              {signal.signal_type} • Confidence: {signal.confidence_score}%
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              {signal.reasoning}
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="font-medium">{trade.pair}</p>
-                          <p className="text-sm text-muted-foreground">
-                            {trade.type} {trade.amount} @ ${trade.price}
-                          </p>
+                        <div className="text-right">
+                          <Badge variant={signal.executed ? 'default' : 'secondary'}>
+                            {signal.executed ? 'Executed' : 'Pending'}
+                          </Badge>
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground mt-1">
+                            <Clock className="w-3 h-3" />
+                            {new Date(signal.created_at).toLocaleString()}
+                            {signal.transaction_hash && (
+                              <Button variant="ghost" size="sm" className="h-auto p-0 ml-2">
+                                <ExternalLink className="w-3 h-3" />
+                              </Button>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                      <div className="text-right">
-                        <p className={`font-medium ${trade.pnl >= 0 ? 'text-neon-green' : 'text-red-400'}`}>
-                          {trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(2)}
-                        </p>
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Clock className="w-3 h-3" />
-                          {new Date(trade.timestamp).toLocaleString()}
-                          <Button variant="ghost" size="sm" className="h-auto p-0 ml-2">
-                            <ExternalLink className="w-3 h-3" />
-                          </Button>
-                        </div>
-                      </div>
-                    </motion.div>
+                      </motion.div>
+                    ))
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="pairs">
+            <Card className="glass-card">
+              <CardHeader>
+                <CardTitle>Trading Pairs</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  {agent.token_pairs.map((pair) => (
+                    <div key={pair} className="p-4 rounded-lg border border-border/50">
+                      <p className="font-medium">{pair}</p>
+                      <p className="text-sm text-muted-foreground">Active</p>
+                    </div>
                   ))}
                 </div>
               </CardContent>
@@ -313,50 +447,46 @@ const AgentDetails = () => {
               <CardContent>
                 <div className="space-y-6">
                   <div>
-                    <h3 className="font-semibold mb-2">Trend Following Strategy</h3>
+                    <h3 className="font-semibold mb-2">{strategyNames[agent.strategy]} Strategy</h3>
                     <p className="text-muted-foreground mb-4">
-                      This agent follows market trends and momentum indicators to make trading decisions.
-                      It uses technical analysis to identify entry and exit points.
+                      {agent.strategy === 'trend' && 'This agent follows market trends and momentum indicators to make trading decisions.'}
+                      {agent.strategy === 'momentum' && 'This agent captures short-term price movements and momentum shifts.'}
+                      {agent.strategy === 'mean-reversion' && 'This agent identifies overbought/oversold conditions and trades reversals.'}
                     </p>
                   </div>
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>
-                      <h4 className="font-medium mb-3">Parameters</h4>
+                      <h4 className="font-medium mb-3">Risk Management</h4>
                       <div className="space-y-2">
                         <div className="flex justify-between">
-                          <span className="text-muted-foreground">Moving Average Period</span>
-                          <span>20</span>
+                          <span className="text-muted-foreground">Risk Level</span>
+                          <span className="capitalize">{agent.risk_level}</span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-muted-foreground">RSI Threshold</span>
-                          <span>70/30</span>
+                          <span className="text-muted-foreground">Slippage Tolerance</span>
+                          <span>{agent.slippage_tolerance}%</span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-muted-foreground">Stop Loss</span>
-                          <span>5%</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-muted-foreground">Take Profit</span>
-                          <span>15%</span>
+                          <span className="text-muted-foreground">Max Position Size</span>
+                          <span>
+                            {agent.risk_level === 'low' ? '10%' : 
+                             agent.risk_level === 'medium' ? '25%' : '40%'}
+                          </span>
                         </div>
                       </div>
                     </div>
                     
                     <div>
-                      <h4 className="font-medium mb-3">Risk Management</h4>
+                      <h4 className="font-medium mb-3">Gas Settings</h4>
                       <div className="space-y-2">
                         <div className="flex justify-between">
-                          <span className="text-muted-foreground">Max Position Size</span>
-                          <span>25%</span>
+                          <span className="text-muted-foreground">Max Fee Per Gas</span>
+                          <span>{(agent.gas_settings as any)?.maxFeePerGas || 'Auto'} Gwei</span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-muted-foreground">Daily Loss Limit</span>
-                          <span>2%</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-muted-foreground">Cooldown Period</span>
-                          <span>1 hour</span>
+                          <span className="text-muted-foreground">Priority Fee</span>
+                          <span>{(agent.gas_settings as any)?.maxPriorityFeePerGas || 'Auto'} Gwei</span>
                         </div>
                       </div>
                     </div>

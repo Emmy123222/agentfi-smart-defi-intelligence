@@ -1,0 +1,29 @@
+{
+  "network": "polygonAmoy",
+  "chainId": "80002",
+  "deployer": "0x21384CDe50cF0BC2d7A3B5ee8abd19ccaeb50EEF",
+  "timestamp": "2026-02-21T08:56:40.316Z",
+  "contracts": {
+    "AgentRegistry": {
+      "address": "0xA9BAE8b8Ad03ca4AF9b51B831468681D82f32C07",
+      "constructorArgs": []
+    },
+    "PerformanceTracker": {
+      "address": "0x9F3A4FB66482825ec898b90Cc4D3711F260782cF",
+      "constructorArgs": [
+        "0xA9BAE8b8Ad03ca4AF9b51B831468681D82f32C07"
+      ]
+    },
+    "MockDEXAggregator": {
+      "address": "0xb3Deb8ca39Ad8156cb4419C0291e80a27b2447aF",
+      "constructorArgs": []
+    },
+    "TradeExecutor": {
+      "address": "0x6BCF7f8CD01EB48287be4c95469Ab2aaf4361eE2",
+      "constructorArgs": [
+        "0xA9BAE8b8Ad03ca4AF9b51B831468681D82f32C07",
+        "0xb3Deb8ca39Ad8156cb4419C0291e80a27b2447aF"
+      ]
+    }
+  }
+}

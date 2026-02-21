@@ -1,7 +1,7 @@
 {
-  "name": "vite_react_shadcn_ts",
+  "name": "agentfi-platform",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,10 +10,16 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "compile": "hardhat compile",
+    "deploy:amoy": "hardhat run scripts/deploy.cjs --network polygonAmoy",
+    "deploy:polygon": "hardhat run scripts/deploy.cjs --network polygon",
+    "verify:amoy": "hardhat verify --network polygonAmoy",
+    "verify:polygon": "hardhat verify --network polygon"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
+    "@openzeppelin/contracts": "^5.4.0",
     "@radix-ui/react-accordion": "^1.2.11",
     "@radix-ui/react-alert-dialog": "^1.1.14",
     "@radix-ui/react-aspect-ratio": "^1.1.7",
@@ -47,6 +53,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "date-fns": "^3.6.0",
+    "dotenv": "^17.3.1",
     "embla-carousel-react": "^8.6.0",
     "framer-motion": "^12.29.2",
     "input-otp": "^1.4.2",
@@ -69,6 +76,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@nomicfoundation/hardhat-verify": "^2.0.0",
     "@tailwindcss/typography": "^0.5.16",
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.0.0",
@@ -81,6 +90,7 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",
     "globals": "^15.15.0",
+    "hardhat": "^2.22.0",
     "jsdom": "^20.0.3",
     "lovable-tagger": "^1.1.13",
     "postcss": "^8.5.6",
