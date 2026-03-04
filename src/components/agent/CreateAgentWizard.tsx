@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useAccount } from 'wagmi';
+import { useAccount, useChainId, useSwitchChain } from 'wagmi';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -10,7 +10,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Slider } from '@/components/ui/slider';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Progress } from '@/components/ui/progress';
-import { AgentService } from '@/services/agentService';
 import { IntegrationService } from '@/services/integrationService';
 import { toast } from 'sonner';
 import { 
@@ -22,9 +21,18 @@ import {
   Shield, 
   DollarSign,
   AlertTriangle,
-  Settings,
-  CheckCircle
+  CheckCircle,
+  Wallet
 } from 'lucide-react';
+
+// ROOT FIX: The previous implementation read chain ID via
+// window.ethereum.request({ method: 'eth_chainId' }) directly.
+// When the app is connected through wagmi, wagmi wraps window.ethereum
+// in its own provider. The raw window.ethereum call can return stale
+// data until wagmi's internal chainChanged listener fires.
+// Fix: use wagmi's useChainId() hook — it is always in sync with the
+// wallet because wagmi manages the event subscription itself.
+const AMOY_CHAIN_ID = 80002;
 
 interface WizardStep {
   id: number;
@@ -33,11 +41,11 @@ interface WizardStep {
 }
 
 const steps: WizardStep[] = [
-  { id: 1, title: 'Basic Info', description: 'Name and strategy selection' },
-  { id: 2, title: 'Risk & Amount', description: 'Configure risk level and investment' },
-  { id: 3, title: 'Trading Pairs', description: 'Select token pairs to trade' },
+  { id: 1, title: 'Basic Info',        description: 'Name and strategy selection' },
+  { id: 2, title: 'Risk & Amount',     description: 'Configure risk level and investment' },
+  { id: 3, title: 'Trading Pairs',     description: 'Select token pairs to trade' },
   { id: 4, title: 'Advanced Settings', description: 'Gas and slippage configuration' },
-  { id: 5, title: 'Review & Deploy', description: 'Confirm and deploy your agent' }
+  { id: 5, title: 'Review & Deploy',   description: 'Confirm and deploy your agent' }
 ];
 
 interface FormData {
@@ -54,23 +62,30 @@ interface FormData {
 }
 
 export const CreateAgentWizard = () => {
-  const { address } = useAccount();
-  const navigate = useNavigate();
-  
+  const { address }               = useAccount();
+  // useChainId() subscribes to wagmi's chain state — always accurate,
+  // never stale, no manual window.ethereum polling needed.
+  const chainId                   = useChainId();
+  const { switchChainAsync }      = useSwitchChain();
+  const navigate                  = useNavigate();
+
   const [currentStep, setCurrentStep] = useState(1);
   const [isDeploying, setIsDeploying] = useState(false);
-  const [formData, setFormData] = useState<FormData>({
-    name: '',
-    strategy: '',
-    riskLevel: '',
-    amount: [1000],
-    tokenPairs: ['MATIC/USDC'],
+  const [isSwitching, setIsSwitching] = useState(false);
+  const [formData, setFormData]       = useState<FormData>({
+    name:              '',
+    strategy:          '',
+    riskLevel:         '',
+    amount:            [1000],
+    tokenPairs:        ['MATIC/USDC'],
     slippageTolerance: [0.5],
     gasSettings: {
-      maxFeePerGas: '30',
+      maxFeePerGas:         '30',
       maxPriorityFeePerGas: '2'
     }
   });
+
+  const isOnAmoy = chainId === AMOY_CHAIN_ID;
 
   const strategies = [
     {
@@ -100,9 +115,9 @@ export const CreateAgentWizard = () => {
   ];
 
   const riskLevels = [
-    { id: 'low', name: 'Conservative', description: 'Lower risk, steady returns', color: 'text-neon-green' },
-    { id: 'medium', name: 'Balanced', description: 'Moderate risk and returns', color: 'text-yellow-400' },
-    { id: 'high', name: 'Aggressive', description: 'Higher risk, higher potential', color: 'text-red-400' }
+    { id: 'low',    name: 'Conservative', description: 'Lower risk, steady returns',    color: 'text-neon-green' },
+    { id: 'medium', name: 'Balanced',     description: 'Moderate risk and returns',     color: 'text-yellow-400' },
+    { id: 'high',   name: 'Aggressive',   description: 'Higher risk, higher potential', color: 'text-red-400'    }
   ];
 
   const availableTokenPairs = [
@@ -113,58 +128,81 @@ export const CreateAgentWizard = () => {
 
   const canProceed = () => {
     switch (currentStep) {
-      case 1: return formData.name && formData.strategy;
-      case 2: return formData.riskLevel && formData.amount[0] > 0;
+      case 1: return !!(formData.name && formData.strategy);
+      case 2: return !!(formData.riskLevel && formData.amount[0] > 0);
       case 3: return formData.tokenPairs.length > 0;
-      case 4: return true; // Advanced settings are optional
-      case 5: return true; // Review step
+      case 4: return true;
+      case 5: return !!address && isOnAmoy;
       default: return false;
     }
   };
 
-  const handleNext = () => {
-    if (currentStep < steps.length) {
-      setCurrentStep(currentStep + 1);
-    }
-  };
+  const handleNext     = () => { if (currentStep < steps.length) setCurrentStep(s => s + 1); };
+  const handlePrevious = () => { if (currentStep > 1)            setCurrentStep(s => s - 1); };
 
-  const handlePrevious = () => {
-    if (currentStep > 1) {
-      setCurrentStep(currentStep - 1);
+  // Switching is now handled by wagmi's useSwitchChain — it uses the same
+  // internal provider as useChainId, so after it resolves, isOnAmoy
+  // will be true on the next render without any manual polling.
+  const handleSwitchNetwork = async () => {
+    try {
+      setIsSwitching(true);
+      await switchChainAsync({ chainId: AMOY_CHAIN_ID });
+      toast.success('Switched to Polygon Amoy!');
+    } catch (err: any) {
+      toast.error('Network switch failed', {
+        description: err?.message ?? 'Please switch to Polygon Amoy manually in MetaMask.'
+      });
+    } finally {
+      setIsSwitching(false);
     }
   };
 
   const handleDeploy = async () => {
     if (!address) {
-      toast.error('Wallet not connected');
+      toast.error('Please connect your wallet before deploying.');
+      return;
+    }
+
+    // Strict check - must be on Amoy
+    if (!isOnAmoy) {
+      toast.error('Wrong Network!', {
+        description: 'Please switch to Polygon Amoy in MetaMask first.'
+      });
       return;
     }
 
     setIsDeploying(true);
-    
     try {
-      // Use integrated service for full blockchain + AI integration
-      const result = await AgentService.createAgentWithIntegration(address, {
-        name: formData.name,
-        strategy: formData.strategy as 'trend' | 'momentum' | 'mean-reversion',
-        riskLevel: formData.riskLevel as 'low' | 'medium' | 'high',
-        allocatedAmount: formData.amount[0],
-        tokenPairs: formData.tokenPairs,
+      const result = await IntegrationService.createAgentWithFullIntegration({
+        name:              formData.name,
+        strategy:          formData.strategy as 'trend' | 'momentum' | 'mean-reversion',
+        riskLevel:         formData.riskLevel as 'low' | 'medium' | 'high',
+        allocatedAmount:   formData.amount[0],
+        tokenPairs:        formData.tokenPairs,
         slippageTolerance: formData.slippageTolerance[0],
-        gasSettings: formData.gasSettings,
+        gasSettings:       formData.gasSettings,
+        walletAddress:     address
       });
-      
+
       if (result.blockchainTxHash) {
-        toast.success(`Agent "${result.agent.name}" created and registered on blockchain! 🚀`);
+        toast.success(`Agent "${result.agent.name}" deployed on-chain! 🚀`, {
+          action: {
+            label: 'View TX',
+            onClick: () => window.open(
+              `https://amoy.polygonscan.com/tx/${result.blockchainTxHash}`,
+              '_blank'
+            )
+          }
+        });
       } else {
-        toast.success(`Agent "${result.agent.name}" created in database! Blockchain registration can be done later.`);
+        toast.success(`Agent "${result.agent.name}" created! Blockchain registration pending.`);
       }
-      
+
+      setIsDeploying(false);
       navigate('/dashboard');
     } catch (error) {
       console.error('Failed to create agent:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to create agent');
-    } finally {
       setIsDeploying(false);
     }
   };
@@ -188,15 +226,11 @@ export const CreateAgentWizard = () => {
               <Label>Trading Strategy *</Label>
               <div className="grid gap-3">
                 {strategies.map((strategy) => (
-                  <motion.div
-                    key={strategy.id}
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                  >
-                    <Card 
+                  <motion.div key={strategy.id} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+                    <Card
                       className={`cursor-pointer transition-colors ${
-                        formData.strategy === strategy.id 
-                          ? 'border-primary bg-primary/5' 
+                        formData.strategy === strategy.id
+                          ? 'border-primary bg-primary/5'
                           : 'border-border hover:border-border/80'
                       }`}
                       onClick={() => setFormData(prev => ({ ...prev, strategy: strategy.id }))}
@@ -206,9 +240,7 @@ export const CreateAgentWizard = () => {
                           <div className="text-primary mt-1">{strategy.icon}</div>
                           <div className="flex-1">
                             <h3 className="font-semibold mb-1">{strategy.name}</h3>
-                            <p className="text-sm text-muted-foreground mb-2">
-                              {strategy.description}
-                            </p>
+                            <p className="text-sm text-muted-foreground mb-2">{strategy.description}</p>
                             <div className="flex gap-4 text-xs">
                               <span className="text-muted-foreground">
                                 Risk: <span className="text-foreground">{strategy.riskLevel}</span>
@@ -233,8 +265,8 @@ export const CreateAgentWizard = () => {
           <div className="space-y-6">
             <div className="space-y-3">
               <Label>Risk Level *</Label>
-              <Select 
-                value={formData.riskLevel} 
+              <Select
+                value={formData.riskLevel}
                 onValueChange={(value) => setFormData(prev => ({ ...prev, riskLevel: value }))}
               >
                 <SelectTrigger>
@@ -245,9 +277,7 @@ export const CreateAgentWizard = () => {
                     <SelectItem key={level.id} value={level.id}>
                       <div className="flex items-center gap-2">
                         <span className={level.color}>{level.name}</span>
-                        <span className="text-muted-foreground text-sm">
-                          - {level.description}
-                        </span>
+                        <span className="text-muted-foreground text-sm">- {level.description}</span>
                       </div>
                     </SelectItem>
                   ))}
@@ -260,17 +290,12 @@ export const CreateAgentWizard = () => {
               <div className="space-y-4">
                 <div className="flex items-center gap-4">
                   <DollarSign className="w-5 h-5 text-muted-foreground" />
-                  <span className="text-2xl font-bold">
-                    ${formData.amount[0].toLocaleString()}
-                  </span>
+                  <span className="text-2xl font-bold">${formData.amount[0].toLocaleString()}</span>
                 </div>
                 <Slider
                   value={formData.amount}
                   onValueChange={(value) => setFormData(prev => ({ ...prev, amount: value }))}
-                  max={10000}
-                  min={100}
-                  step={100}
-                  className="w-full"
+                  max={10000} min={100} step={100} className="w-full"
                 />
                 <div className="flex justify-between text-sm text-muted-foreground">
                   <span>$100</span>
@@ -293,22 +318,15 @@ export const CreateAgentWizard = () => {
                       id={pair}
                       checked={formData.tokenPairs.includes(pair)}
                       onCheckedChange={(checked) => {
-                        if (checked) {
-                          setFormData(prev => ({
-                            ...prev,
-                            tokenPairs: [...prev.tokenPairs, pair]
-                          }));
-                        } else {
-                          setFormData(prev => ({
-                            ...prev,
-                            tokenPairs: prev.tokenPairs.filter(p => p !== pair)
-                          }));
-                        }
+                        setFormData(prev => ({
+                          ...prev,
+                          tokenPairs: checked
+                            ? [...prev.tokenPairs, pair]
+                            : prev.tokenPairs.filter(p => p !== pair)
+                        }));
                       }}
                     />
-                    <Label htmlFor={pair} className="text-sm font-medium">
-                      {pair}
-                    </Label>
+                    <Label htmlFor={pair} className="text-sm font-medium">{pair}</Label>
                   </div>
                 ))}
               </div>
@@ -325,22 +343,14 @@ export const CreateAgentWizard = () => {
             <div className="space-y-3">
               <Label>Slippage Tolerance</Label>
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">
-                    {formData.slippageTolerance[0]}%
-                  </span>
-                </div>
+                <span className="text-sm text-muted-foreground">{formData.slippageTolerance[0]}%</span>
                 <Slider
                   value={formData.slippageTolerance}
                   onValueChange={(value) => setFormData(prev => ({ ...prev, slippageTolerance: value }))}
-                  max={5}
-                  min={0.1}
-                  step={0.1}
-                  className="w-full"
+                  max={5} min={0.1} step={0.1} className="w-full"
                 />
                 <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>0.1%</span>
-                  <span>5%</span>
+                  <span>0.1%</span><span>5%</span>
                 </div>
               </div>
             </div>
@@ -349,15 +359,11 @@ export const CreateAgentWizard = () => {
               <div className="space-y-2">
                 <Label htmlFor="maxFee">Max Fee (Gwei)</Label>
                 <Input
-                  id="maxFee"
-                  type="number"
+                  id="maxFee" type="number"
                   value={formData.gasSettings.maxFeePerGas}
                   onChange={(e) => setFormData(prev => ({
                     ...prev,
-                    gasSettings: {
-                      ...prev.gasSettings,
-                      maxFeePerGas: e.target.value
-                    }
+                    gasSettings: { ...prev.gasSettings, maxFeePerGas: e.target.value }
                   }))}
                   placeholder="30"
                 />
@@ -365,15 +371,11 @@ export const CreateAgentWizard = () => {
               <div className="space-y-2">
                 <Label htmlFor="priorityFee">Priority Fee (Gwei)</Label>
                 <Input
-                  id="priorityFee"
-                  type="number"
+                  id="priorityFee" type="number"
                   value={formData.gasSettings.maxPriorityFeePerGas}
                   onChange={(e) => setFormData(prev => ({
                     ...prev,
-                    gasSettings: {
-                      ...prev.gasSettings,
-                      maxPriorityFeePerGas: e.target.value
-                    }
+                    gasSettings: { ...prev.gasSettings, maxPriorityFeePerGas: e.target.value }
                   }))}
                   placeholder="2"
                 />
@@ -388,10 +390,39 @@ export const CreateAgentWizard = () => {
             <div className="text-center mb-6">
               <CheckCircle className="w-16 h-16 text-neon-green mx-auto mb-4" />
               <h3 className="text-xl font-semibold mb-2">Review Your Agent</h3>
-              <p className="text-muted-foreground">
-                Please review your configuration before deploying
-              </p>
+              <p className="text-muted-foreground">Please review your configuration before deploying</p>
             </div>
+
+            {/* Network status banner — only shown when on wrong network */}
+            {!isOnAmoy && (
+              <div className="flex items-center justify-between p-4 rounded-lg bg-red-500/10 border border-red-500/30">
+                <div className="flex items-center gap-2 text-sm text-red-400">
+                  <AlertTriangle className="w-4 h-4" />
+                  <span>
+                    Wrong network (chain {chainId}). Switch to Polygon Amoy to deploy.
+                  </span>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-red-500/50 text-red-400 hover:bg-red-500/10"
+                  onClick={handleSwitchNetwork}
+                  disabled={isSwitching}
+                >
+                  {isSwitching ? (
+                    <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-1" />
+                  ) : null}
+                  {isSwitching ? 'Switching...' : 'Switch Network'}
+                </Button>
+              </div>
+            )}
+
+            {isOnAmoy && (
+              <div className="flex items-center gap-2 p-3 rounded-lg bg-green-500/10 border border-green-500/20 text-sm text-green-400">
+                <CheckCircle className="w-4 h-4" />
+                Connected to Polygon Amoy ✓
+              </div>
+            )}
 
             <Card className="glass-card">
               <CardContent className="p-6 space-y-4">
@@ -415,14 +446,12 @@ export const CreateAgentWizard = () => {
                     <p className="font-medium">${formData.amount[0].toLocaleString()}</p>
                   </div>
                 </div>
-                
+
                 <div>
                   <p className="text-sm text-muted-foreground mb-2">Trading Pairs</p>
                   <div className="flex flex-wrap gap-2">
                     {formData.tokenPairs.map(pair => (
-                      <span key={pair} className="px-2 py-1 bg-primary/20 rounded text-sm">
-                        {pair}
-                      </span>
+                      <span key={pair} className="px-2 py-1 bg-primary/20 rounded text-sm">{pair}</span>
                     ))}
                   </div>
                 </div>
@@ -437,15 +466,65 @@ export const CreateAgentWizard = () => {
                     <p className="font-medium">{formData.gasSettings.maxFeePerGas} Gwei</p>
                   </div>
                 </div>
+
+                <div>
+                  <p className="text-sm text-muted-foreground">Deploying from</p>
+                  {address
+                    ? <p className="font-mono text-xs text-primary break-all">{address}</p>
+                    : <p className="text-sm text-red-400 flex items-center gap-1">
+                        <Wallet className="w-4 h-4" /> No wallet connected
+                      </p>
+                  }
+                </div>
               </CardContent>
             </Card>
+
+            {/* Network Warning */}
+            {!isOnAmoy && (
+              <div className="flex items-start gap-3 p-4 rounded-lg bg-red-500/10 border-2 border-red-500 mb-4">
+                <AlertTriangle className="w-6 h-6 text-red-500 mt-0.5 flex-shrink-0" />
+                <div className="flex-1">
+                  <p className="font-bold text-red-500 mb-2 text-lg">⚠️ WRONG NETWORK - ACTION REQUIRED</p>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    You're currently on <span className="font-bold">{Number(chainId) === 1 ? 'Ethereum Mainnet' : `Chain ID ${chainId}`}</span>.
+                    <br />
+                    You MUST switch to <span className="font-bold text-red-500">Polygon Amoy (Chain ID: {AMOY_CHAIN_ID})</span> before deploying.
+                  </p>
+                  <div className="bg-red-500/20 p-3 rounded mb-3">
+                    <p className="text-sm font-medium mb-2">📋 Manual Switch Instructions:</p>
+                    <ol className="text-sm space-y-1 list-decimal list-inside">
+                      <li>Open MetaMask</li>
+                      <li>Click the network dropdown at the top</li>
+                      <li>Select "Polygon Amoy"</li>
+                      <li>Come back and click Deploy</li>
+                    </ol>
+                  </div>
+                  <Button 
+                    onClick={handleSwitchNetwork} 
+                    disabled={isSwitching}
+                    size="sm"
+                    variant="destructive"
+                    className="w-full"
+                  >
+                    {isSwitching ? (
+                      <>
+                        <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
+                        Switching...
+                      </>
+                    ) : (
+                      <>Try Automatic Switch (May Not Work)</>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            )}
 
             <div className="flex items-start gap-3 p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
               <AlertTriangle className="w-5 h-5 text-yellow-500 mt-0.5" />
               <div className="text-sm">
                 <p className="font-medium text-yellow-500 mb-1">Important Notice</p>
                 <p className="text-muted-foreground">
-                  Trading involves risk. Only invest what you can afford to lose. 
+                  Trading involves risk. Only invest what you can afford to lose.
                   Past performance does not guarantee future results.
                 </p>
               </div>
@@ -460,37 +539,28 @@ export const CreateAgentWizard = () => {
 
   return (
     <div className="max-w-2xl mx-auto">
-      {/* Progress Header */}
       <div className="mb-8">
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-2xl font-bold">Create AI Trading Agent</h1>
-          <span className="text-sm text-muted-foreground">
-            Step {currentStep} of {steps.length}
-          </span>
+          <span className="text-sm text-muted-foreground">Step {currentStep} of {steps.length}</span>
         </div>
-        
+
         <Progress value={progress} className="mb-4" />
-        
+
         <div className="flex justify-between text-sm">
           {steps.map((step) => (
-            <div 
+            <div
               key={step.id}
-              className={`text-center ${
-                step.id <= currentStep ? 'text-primary' : 'text-muted-foreground'
-              }`}
+              className={`text-center ${step.id <= currentStep ? 'text-primary' : 'text-muted-foreground'}`}
             >
               <div className={`w-8 h-8 rounded-full border-2 flex items-center justify-center mx-auto mb-1 ${
-                step.id < currentStep 
-                  ? 'bg-primary border-primary text-primary-foreground' 
+                step.id < currentStep
+                  ? 'bg-primary border-primary text-primary-foreground'
                   : step.id === currentStep
                   ? 'border-primary text-primary'
                   : 'border-muted-foreground'
               }`}>
-                {step.id < currentStep ? (
-                  <CheckCircle className="w-4 h-4" />
-                ) : (
-                  step.id
-                )}
+                {step.id < currentStep ? <CheckCircle className="w-4 h-4" /> : step.id}
               </div>
               <p className="text-xs font-medium">{step.title}</p>
             </div>
@@ -498,7 +568,6 @@ export const CreateAgentWizard = () => {
         </div>
       </div>
 
-      {/* Step Content */}
       <Card className="glass-card mb-8">
         <CardHeader>
           <CardTitle>{steps[currentStep - 1].title}</CardTitle>
@@ -519,42 +588,43 @@ export const CreateAgentWizard = () => {
         </CardContent>
       </Card>
 
-      {/* Navigation */}
       <div className="flex justify-between">
         <Button
           variant="outline"
           onClick={handlePrevious}
-          disabled={currentStep === 1}
+          disabled={currentStep === 1 || isDeploying || isSwitching}
         >
           <ArrowLeft className="w-4 h-4 mr-2" />
           Previous
         </Button>
 
         {currentStep < steps.length ? (
-          <Button
-            onClick={handleNext}
-            disabled={!canProceed()}
-            className="glow-purple"
-          >
+          <Button onClick={handleNext} disabled={!canProceed()} className="glow-purple">
             Next
             <ArrowRight className="w-4 h-4 ml-2" />
           </Button>
         ) : (
           <Button
             onClick={handleDeploy}
-            disabled={isDeploying || !canProceed()}
+            disabled={isDeploying || isSwitching || !canProceed() || !isOnAmoy}
             className="glow-purple"
           >
-            {isDeploying ? (
+            {isSwitching ? (
+              <>
+                <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
+                Switching Network...
+              </>
+            ) : isDeploying ? (
               <>
                 <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
                 Deploying...
               </>
+            ) : !address ? (
+              <><Wallet className="w-4 h-4 mr-2" />Connect Wallet</>
+            ) : !isOnAmoy ? (
+              <><AlertTriangle className="w-4 h-4 mr-2" />Switch Network First</>
             ) : (
-              <>
-                <Bot className="w-4 h-4 mr-2" />
-                Deploy Agent
-              </>
+              <><Bot className="w-4 h-4 mr-2" />Deploy Agent</>
             )}
           </Button>
         )}

@@ -40,12 +40,8 @@ export class AgentService {
     return IntegrationService.updateAgentStatusWithSync(agentId, newStatus, walletAddress);
   }
 
-  // Get comprehensive agent data from all sources
-  static async getComprehensiveAgentData(agentId: string) {
-    return IntegrationService.getComprehensiveAgentData(agentId);
-  }
   static async createAgent(walletAddress: string, data: CreateAgentData): Promise<Agent> {
-    // First, ensure user profile exists
+    // First, ensure user profile exists (use upsert with onConflict to handle duplicates)
     const { error: profileError } = await supabase
       .from('user_profiles')
       .upsert({
@@ -53,9 +49,13 @@ export class AgentService {
         total_agents: 0,
         total_balance: 0,
         total_pnl: 0,
+      }, {
+        onConflict: 'wallet_address',
+        ignoreDuplicates: true // Ignore if profile already exists
       });
 
-    if (profileError) {
+    if (profileError && profileError.code !== '23505') {
+      // Only log if it's not a duplicate key error
       console.warn('Profile upsert warning:', profileError);
     }
 

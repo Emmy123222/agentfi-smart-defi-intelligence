@@ -1,16 +1,21 @@
 // Blockchain Service for Smart Contract Integration
-import { createPublicClient, createWalletClient, custom, parseEther, formatEther } from 'viem';
+import {
+  createPublicClient,
+  parseEther,
+  formatEther,
+  http,
+  keccak256,
+  toBytes
+} from 'viem';
 import { polygonAmoy } from 'viem/chains';
+import { getWalletClient } from '@wagmi/core';
+import { config } from '@/lib/wagmi';
 import type { Database } from '@/integrations/supabase/types';
 
-// Extend Window interface for ethereum
 declare global {
-  interface Window {
-    ethereum?: any;
-  }
+  interface Window { ethereum?: any; }
 }
 
-// Contract ABIs (simplified for key functions)
 const AGENT_REGISTRY_ABI = [
   {
     inputs: [
@@ -26,7 +31,10 @@ const AGENT_REGISTRY_ABI = [
     type: 'function'
   },
   {
-    inputs: [{ name: '_agentId', type: 'uint256' }, { name: '_newStatus', type: 'uint8' }],
+    inputs: [
+      { name: '_agentId', type: 'uint256' },
+      { name: '_newStatus', type: 'uint8' }
+    ],
     name: 'updateAgentStatus',
     outputs: [],
     stateMutability: 'nonpayable',
@@ -82,155 +90,134 @@ const TRADE_EXECUTOR_ABI = [
   }
 ] as const;
 
-// Contract addresses from environment
 const AGENT_REGISTRY_ADDRESS = import.meta.env.VITE_AGENT_REGISTRY_ADDRESS as `0x${string}`;
-const TRADE_EXECUTOR_ADDRESS = import.meta.env.VITE_TRADE_EXECUTOR_ADDRESS as `0x${string}`;
+const TRADE_EXECUTOR_ADDRESS  = import.meta.env.VITE_TRADE_EXECUTOR_ADDRESS  as `0x${string}`;
+const AMOY_RPC_URL = 'https://rpc-amoy.polygon.technology';
 
-// Strategy and Risk Level enums (matching smart contract)
-export enum Strategy {
-  TrendFollowing = 0,
-  Momentum = 1,
-  MeanReversion = 2
-}
+export enum Strategy    { TrendFollowing = 0, Momentum = 1, MeanReversion = 2 }
+export enum RiskLevel   { Low = 0, Medium = 1, High = 2 }
+export enum AgentStatus { Created = 0, Active = 1, Paused = 2, Stopped = 3 }
 
-export enum RiskLevel {
-  Low = 0,
-  Medium = 1,
-  High = 2
-}
-
-export enum AgentStatus {
-  Created = 0,
-  Active = 1,
-  Paused = 2,
-  Stopped = 3
-}
-
-type Agent = Database['public']['Tables']['agents']['Row'];
+type Agent         = Database['public']['Tables']['agents']['Row'];
 type TradingSignal = Database['public']['Tables']['trading_signals']['Row'];
 
-export class BlockchainService {
-  private static publicClient = createPublicClient({
-    chain: polygonAmoy,
-    transport: custom(typeof window !== 'undefined' && window.ethereum ? window.ethereum : {})
-  });
+interface BlockchainAgent {
+  id: bigint;
+  owner: `0x${string}`;
+  name: string;
+  strategy: number;
+  riskLevel: number;
+  allocatedAmount: bigint;
+  status: number;
+  configHash: `0x${string}`;
+  createdAt: bigint;
+  updatedAt: bigint;
+}
 
-  private static getWalletClient() {
-    if (typeof window === 'undefined' || !window.ethereum) {
-      throw new Error('No wallet found. Please install MetaMask or another Web3 wallet.');
-    }
-    
-    return createWalletClient({
+export class BlockchainService {
+
+  /** HTTP transport for reads — never depends on wallet chain state. */
+  private static getPublicClient() {
+    return createPublicClient({
       chain: polygonAmoy,
-      transport: custom(window.ethereum)
+      transport: http(AMOY_RPC_URL)
     });
   }
 
-  // Check if wallet is connected and get account
+  /**
+   * Wallet client for writes.
+   * Uses wagmi to get the active wallet client (supports Injected, WalletConnect, etc.)
+   */
+  private static async getWalletClient() {
+    return await getWalletClient(config, { chainId: polygonAmoy.id });
+  }
+
+  private static mapStrategy(s: string): Strategy {
+    if (s === 'trend')          return Strategy.TrendFollowing;
+    if (s === 'momentum')       return Strategy.Momentum;
+    if (s === 'mean-reversion') return Strategy.MeanReversion;
+    return Strategy.TrendFollowing;
+  }
+
+  private static mapRiskLevel(r: string): RiskLevel {
+    if (r === 'low')  return RiskLevel.Low;
+    if (r === 'high') return RiskLevel.High;
+    return RiskLevel.Medium;
+  }
+
+  private static mapStatus(s: string): AgentStatus {
+    if (s === 'active')  return AgentStatus.Active;
+    if (s === 'paused')  return AgentStatus.Paused;
+    if (s === 'stopped') return AgentStatus.Stopped;
+    return AgentStatus.Created;
+  }
+
+  private static uuidToBigInt(uuid: string): bigint {
+    return BigInt(keccak256(toBytes(uuid)));
+  }
+
+  // ─── Public read helpers ──────────────────────────────────────────────────
+
   static async getConnectedAccount(): Promise<`0x${string}` | null> {
     try {
-      if (typeof window === 'undefined' || !window.ethereum) {
-        return null;
-      }
-
-      const accounts = await window.ethereum.request({ 
-        method: 'eth_accounts' 
-      });
-      
+      if (typeof window === 'undefined' || !window.ethereum) return null;
+      const accounts = await window.ethereum.request({ method: 'eth_accounts' });
       return accounts.length > 0 ? accounts[0] : null;
-    } catch (error) {
-      console.error('Failed to get connected account:', error);
+    } catch {
       return null;
     }
   }
 
-  // Request wallet connection
   static async connectWallet(): Promise<`0x${string}`> {
+    if (typeof window === 'undefined' || !window.ethereum) {
+      throw new Error('No wallet found. Please install MetaMask.');
+    }
+    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    if (accounts.length === 0) throw new Error('No accounts found. Please connect your wallet.');
+    return accounts[0];
+  }
+
+  static async checkBlockchainAvailability(): Promise<boolean> {
     try {
-      if (typeof window === 'undefined' || !window.ethereum) {
-        throw new Error('No wallet found. Please install MetaMask.');
-      }
-
-      const accounts = await window.ethereum.request({ 
-        method: 'eth_requestAccounts' 
-      });
-      
-      if (accounts.length === 0) {
-        throw new Error('No accounts found. Please connect your wallet.');
-      }
-
-      return accounts[0];
+      const block = await this.getPublicClient().getBlockNumber();
+      console.log('✅ RPC accessible. Latest block:', block.toString());
+      return block > 0n;
     } catch (error) {
-      console.error('Failed to connect wallet:', error);
-      throw new Error('Failed to connect wallet');
+      console.error('❌ Blockchain RPC check failed:', error);
+      return false;
     }
   }
 
-  // Convert database strategy to blockchain enum
-  private static mapStrategy(strategy: string): Strategy {
-    switch (strategy) {
-      case 'trend': return Strategy.TrendFollowing;
-      case 'momentum': return Strategy.Momentum;
-      case 'mean-reversion': return Strategy.MeanReversion;
-      default: return Strategy.TrendFollowing;
-    }
-  }
+  // ─── Contract writes ──────────────────────────────────────────────────────
 
-  // Convert database risk level to blockchain enum
-  private static mapRiskLevel(riskLevel: string): RiskLevel {
-    switch (riskLevel) {
-      case 'low': return RiskLevel.Low;
-      case 'medium': return RiskLevel.Medium;
-      case 'high': return RiskLevel.High;
-      default: return RiskLevel.Medium;
-    }
-  }
-
-  // Convert database status to blockchain enum
-  private static mapStatus(status: string): AgentStatus {
-    switch (status) {
-      case 'created': return AgentStatus.Created;
-      case 'active': return AgentStatus.Active;
-      case 'paused': return AgentStatus.Paused;
-      case 'stopped': return AgentStatus.Stopped;
-      default: return AgentStatus.Created;
-    }
-  }
-
-  // Register agent on blockchain
-  static async registerAgentOnChain(agent: Agent, walletAddress: `0x${string}`): Promise<string> {
+  static async registerAgentOnChain(
+    agent: Agent,
+    walletAddress: `0x${string}`
+  ): Promise<{ txHash: string; blockchainAgentId?: bigint }> {
     try {
-      // Ensure wallet is connected
-      const connectedAccount = await this.getConnectedAccount();
-      if (!connectedAccount || connectedAccount.toLowerCase() !== walletAddress.toLowerCase()) {
-        throw new Error('Wallet not connected or address mismatch');
-      }
+      console.log('🔗 Registering agent on-chain:', agent.name);
 
-      // Check network
-      const isCorrectNetwork = await this.checkNetwork();
-      if (!isCorrectNetwork) {
-        await this.switchToAmoyNetwork();
+      if (!walletAddress || walletAddress === '0x') {
+        throw new Error('Wallet address is required.');
       }
+      const walletClient = await this.getWalletClient();
 
-      const walletClient = this.getWalletClient();
-      
-      // Generate config hash from agent data
-      const configData = JSON.stringify({
-        name: agent.name,
-        strategy: agent.strategy,
-        riskLevel: agent.risk_level,
-        tokenPairs: agent.token_pairs,
-        gasSettings: agent.gas_settings,
+      const configHash = keccak256(toBytes(JSON.stringify({
+        name:              agent.name,
+        strategy:          agent.strategy,
+        riskLevel:         agent.risk_level,
+        tokenPairs:        agent.token_pairs,
+        gasSettings:       agent.gas_settings,
         slippageTolerance: agent.slippage_tolerance
-      });
-      
-      const configHash = `0x${Buffer.from(configData).toString('hex').padStart(64, '0').slice(0, 64)}` as `0x${string}`;
-      
+      })));
+
+      console.log('📝 Sending registerAgent transaction to:', AGENT_REGISTRY_ADDRESS);
+
       const hash = await walletClient.writeContract({
-        address: AGENT_REGISTRY_ADDRESS,
-        abi: AGENT_REGISTRY_ABI,
+        address:      AGENT_REGISTRY_ADDRESS,
+        abi:          AGENT_REGISTRY_ABI,
         functionName: 'registerAgent',
-        chain: polygonAmoy,
+        chain:        polygonAmoy,
         args: [
           agent.name,
           this.mapStrategy(agent.strategy),
@@ -241,166 +228,134 @@ export class BlockchainService {
         account: walletAddress
       });
 
-      return hash;
-    } catch (error) {
-      console.error('Failed to register agent on blockchain:', error);
+      console.log('✅ TX sent:', hash);
+      console.log('🔍 https://amoy.polygonscan.com/tx/' + hash);
+
+      const receipt = await this.getPublicClient().waitForTransactionReceipt({ hash });
+      console.log('✅ Confirmed. Block:', receipt.blockNumber);
+
+      let blockchainAgentId: bigint | undefined;
+      if (receipt.logs?.length > 0) {
+        console.log('📋 Logs:', receipt.logs);
+        // TODO: decode AgentRegistered event to extract on-chain agent ID
+      }
+
+      return { txHash: hash, blockchainAgentId };
+    } catch (error: any) {
+      console.error('❌ registerAgentOnChain failed:', error);
+      if (error.message?.includes('User rejected'))     throw new Error('Transaction rejected by user');
+      if (error.message?.includes('insufficient funds')) throw new Error('Insufficient MATIC balance');
+      if (error.message?.includes('Wrong network'))     throw error; // Pass through our custom error
       throw new Error(`Blockchain registration failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
-  // Update agent status on blockchain
   static async updateAgentStatusOnChain(
-    agentId: string, 
-    status: string, 
+    agentId: string,
+    status: string,
     walletAddress: `0x${string}`
   ): Promise<string> {
     try {
-      // Ensure wallet is connected
-      const connectedAccount = await this.getConnectedAccount();
-      if (!connectedAccount || connectedAccount.toLowerCase() !== walletAddress.toLowerCase()) {
-        throw new Error('Wallet not connected or address mismatch');
-      }
+      console.log('🔗 Updating agent status on-chain. ID:', agentId, 'Status:', status);
 
-      // Check network
-      const isCorrectNetwork = await this.checkNetwork();
-      if (!isCorrectNetwork) {
-        await this.switchToAmoyNetwork();
-      }
+      if (!walletAddress || walletAddress === '0x') throw new Error('Wallet address is required.');
+      const walletClient = await this.getWalletClient();
+      const blockchainId = this.uuidToBigInt(agentId);
 
-      const walletClient = this.getWalletClient();
-      
       const hash = await walletClient.writeContract({
-        address: AGENT_REGISTRY_ADDRESS,
-        abi: AGENT_REGISTRY_ABI,
+        address:      AGENT_REGISTRY_ADDRESS,
+        abi:          AGENT_REGISTRY_ABI,
         functionName: 'updateAgentStatus',
-        chain: polygonAmoy,
-        args: [BigInt(agentId), this.mapStatus(status)],
-        account: walletAddress
+        chain:        polygonAmoy,
+        args:         [blockchainId, this.mapStatus(status)],
+        account:      walletAddress
       });
 
+      console.log('✅ TX sent:', hash);
+      const receipt = await this.getPublicClient().waitForTransactionReceipt({ hash });
+      console.log('✅ Confirmed. Block:', receipt.blockNumber);
       return hash;
-    } catch (error) {
-      console.error('Failed to update agent status on blockchain:', error);
-      throw new Error(`Blockchain status update failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } catch (error: any) {
+      console.error('❌ updateAgentStatusOnChain failed:', error);
+      if (error.message?.includes('User rejected'))     throw new Error('Transaction rejected by user');
+      if (error.message?.includes('insufficient funds')) throw new Error('Insufficient MATIC balance');
+      throw new Error(`Status update failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
-  // Get agent from blockchain (simplified for now)
-  static async getAgentFromChain(agentId: string) {
-    try {
-      // For now, return a mock response since the read contract has type issues
-      // In production, you'd fix the ABI types properly
-      return {
-        id: agentId,
-        owner: '0x0000000000000000000000000000000000000000',
-        name: 'Blockchain Agent',
-        strategy: 0,
-        riskLevel: 1,
-        allocatedAmount: '100',
-        status: 1,
-        configHash: '0x0000000000000000000000000000000000000000000000000000000000000000',
-        createdAt: new Date(),
-        updatedAt: new Date()
-      };
-    } catch (error) {
-      console.error('Failed to get agent from blockchain:', error);
-      throw new Error('Failed to fetch agent from blockchain');
-    }
-  }
-
-  // Execute trading signal on blockchain
   static async executeSignalOnChain(
     signal: TradingSignal,
     walletAddress: `0x${string}`
   ): Promise<string> {
     try {
-      // Ensure wallet is connected
-      const connectedAccount = await this.getConnectedAccount();
-      if (!connectedAccount || connectedAccount.toLowerCase() !== walletAddress.toLowerCase()) {
-        throw new Error('Wallet not connected or address mismatch. Please connect your wallet first.');
-      }
+      console.log('🔗 Executing signal on-chain:', signal.id);
 
-      // Check network
-      const isCorrectNetwork = await this.checkNetwork();
-      if (!isCorrectNetwork) {
-        console.log('Switching to Polygon Amoy network...');
-        await this.switchToAmoyNetwork();
-      }
+      if (!walletAddress || walletAddress === '0x') throw new Error('Wallet address is required.');
+      const walletClient = await this.getWalletClient();
 
-      const walletClient = this.getWalletClient();
-      
-      // Mock token addresses for Polygon Amoy (you'll need real ones)
       const MATIC_ADDRESS = '0x0000000000000000000000000000000000001010';
-      const USDC_ADDRESS = '0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582'; // Mock USDC on Amoy
-      
-      const signalData = {
-        agentId: BigInt(signal.agent_id),
-        tokenIn: MATIC_ADDRESS as `0x${string}`,
-        tokenOut: USDC_ADDRESS as `0x${string}`,
-        amountIn: parseEther('0.1'), // Mock amount
-        minAmountOut: parseEther('0.09'), // Mock min amount with slippage
-        deadline: BigInt(Math.floor(Date.now() / 1000) + 3600), // 1 hour deadline
-        signalId: `0x${signal.id.replace(/-/g, '').padStart(64, '0')}` as `0x${string}`
-      };
+      const USDC_ADDRESS  = '0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582';
 
       const hash = await walletClient.writeContract({
-        address: TRADE_EXECUTOR_ADDRESS,
-        abi: TRADE_EXECUTOR_ABI,
+        address:      TRADE_EXECUTOR_ADDRESS,
+        abi:          TRADE_EXECUTOR_ABI,
         functionName: 'executeSignal',
-        chain: polygonAmoy,
-        args: [signalData],
+        chain:        polygonAmoy,
+        args: [{
+          agentId:      this.uuidToBigInt(signal.agent_id),
+          tokenIn:      MATIC_ADDRESS as `0x${string}`,
+          tokenOut:     USDC_ADDRESS  as `0x${string}`,
+          amountIn:     parseEther('0.1'),
+          minAmountOut: parseEther('0.09'),
+          deadline:     BigInt(Math.floor(Date.now() / 1000) + 3600),
+          signalId:     keccak256(toBytes(signal.id))
+        }],
         account: walletAddress
       });
 
+      console.log('✅ TX sent:', hash);
+      const receipt = await this.getPublicClient().waitForTransactionReceipt({ hash });
+      console.log('✅ Confirmed. Block:', receipt.blockNumber);
       return hash;
-    } catch (error) {
-      console.error('Failed to execute signal on blockchain:', error);
+    } catch (error: any) {
+      console.error('❌ executeSignalOnChain failed:', error);
+      if (error.message?.includes('User rejected'))     throw new Error('Transaction rejected by user');
+      if (error.message?.includes('insufficient funds')) throw new Error('Insufficient MATIC balance');
       throw new Error(`Signal execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
-  // Check if wallet is connected to correct network
-  static async checkNetwork(): Promise<boolean> {
+  static async getAgentFromChain(agentId: string) {
     try {
-      const chainId = await this.publicClient.getChainId();
-      return chainId === polygonAmoy.id;
+      console.log('📖 Reading agent from blockchain. ID:', agentId);
+      
+      const publicClient = this.getPublicClient();
+      const blockchainId = this.uuidToBigInt(agentId);
+
+      const result = await publicClient.readContract({
+        address:      AGENT_REGISTRY_ADDRESS,
+        abi:          AGENT_REGISTRY_ABI,
+        functionName: 'getAgent',
+        args:         [blockchainId]
+      } as any) as BlockchainAgent;
+
+      console.log('✅ Agent data from blockchain:', result);
+
+      return {
+        id:              agentId,
+        owner:           result.owner,
+        name:            result.name,
+        strategy:        result.strategy,
+        riskLevel:       result.riskLevel,
+        allocatedAmount: formatEther(result.allocatedAmount),
+        status:          result.status,
+        configHash:      result.configHash,
+        createdAt:       new Date(Number(result.createdAt) * 1000),
+        updatedAt:       new Date(Number(result.updatedAt) * 1000)
+      };
     } catch (error) {
-      console.error('Failed to check network:', error);
-      return false;
-    }
-  }
-
-  // Switch to Polygon Amoy network
-  static async switchToAmoyNetwork(): Promise<void> {
-    try {
-      if (!window.ethereum) {
-        throw new Error('No wallet found');
-      }
-
-      await window.ethereum.request({
-        method: 'wallet_switchEthereumChain',
-        params: [{ chainId: '0x13882' }], // 80002 in hex
-      });
-    } catch (error: any) {
-      // If network doesn't exist, add it
-      if (error.code === 4902) {
-        await window.ethereum.request({
-          method: 'wallet_addEthereumChain',
-          params: [{
-            chainId: '0x13882',
-            chainName: 'Polygon Amoy Testnet',
-            nativeCurrency: {
-              name: 'MATIC',
-              symbol: 'MATIC',
-              decimals: 18,
-            },
-            rpcUrls: ['https://rpc-amoy.polygon.technology'],
-            blockExplorerUrls: ['https://amoy.polygonscan.com/'],
-          }],
-        });
-      } else {
-        throw error;
-      }
+      console.error('❌ Failed to read agent from blockchain:', error);
+      throw new Error(`Failed to read agent from blockchain: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 }

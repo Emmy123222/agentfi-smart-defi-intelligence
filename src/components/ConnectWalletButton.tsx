@@ -1,5 +1,5 @@
 import { useAccount, useConnect, useDisconnect, useChainId, useSwitchChain } from 'wagmi';
-import { polygon } from 'wagmi/chains';
+import { polygonAmoy } from 'wagmi/chains';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -18,7 +18,7 @@ export function ConnectWalletButton() {
   const chainId = useChainId();
   const { switchChain } = useSwitchChain();
 
-  const isWrongNetwork = isConnected && chainId !== polygon.id;
+  const isWrongNetwork = isConnected && chainId !== polygonAmoy.id;
 
   const truncateAddress = (addr: string) => {
     return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
@@ -33,12 +33,12 @@ export function ConnectWalletButton() {
 
   const openExplorer = () => {
     if (address) {
-      window.open(`https://polygonscan.com/address/${address}`, '_blank');
+      window.open(`https://amoy.polygonscan.com/address/${address}`, '_blank');
     }
   };
 
   const handleSwitchNetwork = () => {
-    switchChain({ chainId: polygon.id });
+    switchChain({ chainId: polygonAmoy.id });
   };
 
   if (isConnected && address) {
@@ -49,7 +49,7 @@ export function ConnectWalletButton() {
           className="bg-neon-orange/20 border border-neon-orange text-neon-orange hover:bg-neon-orange/30"
         >
           <AlertTriangle className="w-4 h-4 mr-2" />
-          Switch to Polygon
+          Switch to Amoy
         </Button>
       );
     }
